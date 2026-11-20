@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect width="64" height="64" rx="14" fill="#0A2A1E" />
+  <path
+    d="M18 44C18 28.536 28.536 18 44 18C44 33.464 33.464 44 18 44Z"
+    fill="#10B981"
+    fill-opacity="0.22"
+    stroke="#E2F5EA"
+    stroke-width="3"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M21 41L39 23"
+    stroke="#E2F5EA"
+    stroke-width="3"
+    stroke-linecap="round"
+  />
+  <circle cx="44" cy="44" r="4" fill="#F59E0B" />
+</svg>

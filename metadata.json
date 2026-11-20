@@ -1,0 +1,6 @@
+{
+  "name": "KHADOK — Smarter Food. Less Waste.",
+  "description": "Food inventory, demand forecasting and waste prevention for small food businesses in Bangladesh.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
