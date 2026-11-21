@@ -103,17 +103,9 @@ const CardSparkWave: React.FC<{
         strokeLinecap="round"
         initial={reducedMotion ? false : { pathLength: 0, opacity: 0.4 }}
         animate={{ pathLength: 1, opacity: 1 }}
-        transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
+        transition={{ duration: 0.48, ease: [0.16, 1, 0.3, 1] }}
       />
-      <motion.circle
-        cx={last.x}
-        cy={last.y}
-        r="3.2"
-        fill={stroke}
-        style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
-        animate={reducedMotion ? undefined : { opacity: [0.6, 1, 0.6], scale: [0.92, 1.18, 0.92] }}
-        transition={{ duration: 2.2, repeat: Infinity, ease: 'easeInOut' }}
-      />
+      <circle cx={last.x} cy={last.y} r="3.2" fill={stroke} />
     </svg>
   );
 };
@@ -191,16 +183,16 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
     hidden: { opacity: 0 },
     show: {
       opacity: 1,
-      transition: { staggerChildren: reducedMotion ? 0 : 0.045 },
+      transition: { staggerChildren: reducedMotion ? 0 : 0.04 },
     },
   };
 
   const itemVariants = {
-    hidden: reducedMotion ? { opacity: 1 } : { opacity: 0, y: 10 },
+    hidden: reducedMotion ? { opacity: 1 } : { opacity: 0, y: 8 },
     show: {
       opacity: 1,
       y: 0,
-      transition: { duration: 0.28, ease: [0.16, 1, 0.3, 1] as const },
+      transition: { duration: 0.22, ease: [0.16, 1, 0.3, 1] as const },
     },
   };
 
@@ -267,10 +259,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               );
 
               return (
-                <div
-                  key={item.id}
-                  className={idx === 1 && !reducedMotion ? 'xl:-translate-y-1.5 h-full' : 'h-full'}
-                >
+                <div key={item.id} className="h-full">
                   <LiquidGlassCard
                     variant={cfg.variant}
                     hoverLift
@@ -578,7 +567,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             rescuedBdt={rescuedValueWeek}
             rescueRatePercent={rescueRatePercent}
             reducedMotion={reducedMotion}
-            onPrimaryAction={onOpenWasteModal}
+            onPrimaryAction={() => onNavigate('rescue')}
           />
         </motion.div>
       </div>

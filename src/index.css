@@ -15,7 +15,7 @@
   body {
     background-color: #FFFFFF;
     color: #0F172A;
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   h1, h2, h3, h4, .font-display, .font-stencil {

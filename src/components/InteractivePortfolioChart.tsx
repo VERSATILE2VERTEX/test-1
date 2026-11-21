@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowUpRight, Droplets, MoreVertical } from 'lucide-react';
 import { formatBdt, formatNum } from '../i18n/translations';
@@ -37,6 +37,21 @@ export const InteractivePortfolioChart: React.FC<InteractivePortfolioChartProps>
   const [timeframe, setTimeframe] = useState<Timeframe>('1W');
   const [activeIndex, setActiveIndex] = useState<number>(5);
   const svgRef = useRef<SVGSVGElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 460, h: 128 });
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect && rect.width > 0 && rect.height > 0) {
+        setBox({ w: rect.width, h: rect.height });
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const seriesByTimeframe = useMemo<Record<Timeframe, ChartPoint[]>>(() => {
     const base = Math.max(12000, Math.round(totalStockValue));
@@ -155,11 +170,9 @@ export const InteractivePortfolioChart: React.FC<InteractivePortfolioChartProps>
           reducedMotion={reducedMotion}
           className="squircle-28 p-5 sm:p-6 flex flex-col justify-between flex-1"
         >
-          {/* Floating Droplet Highlight Accent */}
+          {/* Droplet Highlight Accent */}
           <div
-            className={`pointer-events-none absolute top-4 right-14 w-7 h-7 rounded-full bg-white/75 border border-white shadow-sm flex items-center justify-center ${
-              reducedMotion ? '' : 'droplet-float'
-            }`}
+            className="pointer-events-none absolute top-4 right-14 w-7 h-7 rounded-full bg-white/75 border border-white shadow-sm flex items-center justify-center"
             aria-hidden="true"
           >
             <Droplets className="w-3.5 h-3.5 text-sky-500" />
@@ -205,19 +218,19 @@ export const InteractivePortfolioChart: React.FC<InteractivePortfolioChartProps>
           </div>
 
           {/* Multi-layered Spline/Area SVG Chart */}
-          <div className="relative mt-4 mb-2 select-none">
-            {/* Magnetic Floating Dark Glass Callout Tooltip (Reference Image 1) */}
+          <div ref={wrapRef} className="relative mt-4 mb-2 select-none">
+            {/* Magnetic Floating Dark Glass Callout Tooltip (GPU x/y transform only) */}
             <motion.div
               animate={{
-                left: `${Math.max(12, Math.min(88, (activeCoord.x / width) * 100))}%`,
-                top: `${Math.max(12, (activeCoord.y / height) * 100 - 16)}%`,
+                x: Math.max(46, Math.min(box.w - 46, (activeCoord.x / width) * box.w)),
+                y: Math.max(24, (activeCoord.y / height) * box.h - 14),
               }}
               transition={
                 reducedMotion
                   ? { duration: 0 }
-                  : { duration: 0.16, ease: [0.16, 1, 0.3, 1] }
+                  : { duration: 0.14, ease: [0.16, 1, 0.3, 1] }
               }
-              className="pointer-events-none absolute z-20"
+              className="pointer-events-none absolute left-0 top-0 z-20"
             >
               <div className="-translate-x-1/2 -translate-y-full px-3 py-1 rounded-full bg-[#141619] text-white border border-white/20 text-[11px] font-bold whitespace-nowrap shadow-[0_10px_22px_-6px_rgba(15,23,42,0.4)] flex items-center gap-1.5">
                 <span>{formatBdt(activePoint.valueBdt, locale)}</span>
@@ -254,7 +267,7 @@ export const InteractivePortfolioChart: React.FC<InteractivePortfolioChartProps>
                 strokeWidth="1.6"
                 initial={reducedMotion ? false : { pathLength: 0 }}
                 animate={{ pathLength: 1 }}
-                transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
+                transition={{ duration: 0.48, ease: [0.16, 1, 0.3, 1] }}
               />
 
               {/* Area Fill */}
@@ -264,7 +277,7 @@ export const InteractivePortfolioChart: React.FC<InteractivePortfolioChartProps>
                 fill="url(#whiteModeBlueFill)"
                 initial={reducedMotion ? false : { opacity: 0 }}
                 animate={{ opacity: 1 }}
-                transition={{ duration: 0.45 }}
+                transition={{ duration: 0.3 }}
               />
 
               {/* Primary Glowing Spline */}
@@ -277,34 +290,31 @@ export const InteractivePortfolioChart: React.FC<InteractivePortfolioChartProps>
                 strokeLinecap="round"
                 initial={reducedMotion ? false : { pathLength: 0 }}
                 animate={{ pathLength: 1 }}
-                transition={{ duration: 0.75, ease: [0.16, 1, 0.3, 1] }}
+                transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
               />
 
-              {/* Vertical Scrub Line & Cursor */}
-              <motion.line
-                animate={{ x1: activeCoord.x, x2: activeCoord.x }}
+              {/* Vertical Scrub Line & Cursor (GPU group transform) */}
+              <motion.g
+                animate={{ x: activeCoord.x }}
                 transition={reducedMotion ? { duration: 0 } : SPRING_SNAPPY}
-                y1={activeCoord.y}
-                y2={height}
-                stroke="#60A5FA"
-                strokeWidth="1.4"
-                strokeDasharray="3 3"
-              />
-              <motion.circle
-                animate={{ cx: activeCoord.x, cy: activeCoord.y }}
+              >
+                <line
+                  x1={0}
+                  x2={0}
+                  y1={activeCoord.y}
+                  y2={height}
+                  stroke="#60A5FA"
+                  strokeWidth="1.4"
+                  strokeDasharray="3 3"
+                />
+              </motion.g>
+              <motion.g
+                animate={{ x: activeCoord.x, y: activeCoord.y }}
                 transition={reducedMotion ? { duration: 0 } : SPRING_SNAPPY}
-                r="9"
-                fill="#3B82F6"
-                fillOpacity="0.2"
-              />
-              <motion.circle
-                animate={{ cx: activeCoord.x, cy: activeCoord.y }}
-                transition={reducedMotion ? { duration: 0 } : SPRING_SNAPPY}
-                r="4.5"
-                fill="#3B82F6"
-                stroke="#FFFFFF"
-                strokeWidth="2"
-              />
+              >
+                <circle cx={0} cy={0} r="9" fill="#3B82F6" fillOpacity="0.2" />
+                <circle cx={0} cy={0} r="4.5" fill="#3B82F6" stroke="#FFFFFF" strokeWidth="2" />
+              </motion.g>
             </svg>
           </div>
 

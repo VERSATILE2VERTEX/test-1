@@ -1,6 +1,6 @@
 export type Locale = 'en' | 'bn';
 
-export type ViewTab = 'overview' | 'inventory' | 'forecast' | 'waste';
+export type ViewTab = 'overview' | 'inventory' | 'rescue' | 'waste' | 'forecast';
 
 export type InventoryCategory =
   | 'grains'
@@ -55,7 +55,15 @@ export interface DayForecastPoint {
   multiplier: number;
 }
 
-export type WasteDisposition = 'spoiled' | 'overprep' | 'rescued_discount' | 'rescued_donation' | 'staff_meal';
+export type WasteDisposition =
+  | 'spoiled'
+  | 'prep_trim'
+  | 'overprep'
+  | 'damaged'
+  | 'rescued_discount'
+  | 'rescued_donation'
+  | 'staff_meal'
+  | 'meal_prep';
 
 export interface WasteLogEntry {
   id: string;
@@ -69,6 +77,15 @@ export interface WasteLogEntry {
   noteEn: string;
   noteBn: string;
   timestamp: string;
+}
+
+export interface ToastActionMessage {
+  id: string;
+  kind: 'stock' | 'rescue' | 'waste';
+  title: string;
+  subtitle: string;
+  prevInventory: InventoryItem[];
+  prevWasteLogs: WasteLogEntry[];
 }
 
 export interface OutletProfile {

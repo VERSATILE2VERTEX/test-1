@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { formatBdt, formatNum, TRANSLATIONS } from '../i18n/translations';
 import { DishForecast, InventoryItem, Locale } from '../types';
@@ -33,6 +33,21 @@ export const ForecastView: React.FC<ForecastViewProps> = ({
   const [horizon, setHorizon] = useState<ForecastHorizon>(7);
   const [scrubIdx, setScrubIdx] = useState<number>(6);
   const svgRef = useRef<SVGSVGElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 760, h: 192 });
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect && rect.width > 0 && rect.height > 0) {
+        setBox({ w: rect.width, h: rect.height });
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const scenarios = [
     { id: 'weekday', label: t.driverWeekday, val: 1.0 },
@@ -213,14 +228,14 @@ export const ForecastView: React.FC<ForecastViewProps> = ({
         </div>
 
         {/* Multi-Band SVG Forecast Graph */}
-        <div className="relative mt-5 mb-2 select-none">
+        <div ref={wrapRef} className="relative mt-5 mb-2 select-none">
           <motion.div
             animate={{
-              left: `${Math.max(10, Math.min(90, (activeCoord.x / width) * 100))}%`,
-              top: `${Math.max(14, (activeCoord.y / height) * 100 - 14)}%`,
+              x: Math.max(52, Math.min(box.w - 52, (activeCoord.x / width) * box.w)),
+              y: Math.max(26, (activeCoord.y / height) * box.h - 14),
             }}
-            transition={reducedMotion ? { duration: 0 } : { duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-            className="pointer-events-none absolute z-20"
+            transition={reducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
+            className="pointer-events-none absolute left-0 top-0 z-20"
           >
             <div className="-translate-x-1/2 -translate-y-full px-3 py-1 rounded-full bg-[#141619] text-white border border-white/20 text-xs font-bold whitespace-nowrap shadow-lg flex items-center gap-2">
               <span>
@@ -252,8 +267,8 @@ export const ForecastView: React.FC<ForecastViewProps> = ({
               d={bandPath}
               fill="url(#confidenceBandFill)"
               initial={reducedMotion ? false : { opacity: 0 }}
-              animate={{ d: bandPath, opacity: 1 }}
-              transition={{ duration: reducedMotion ? 0 : 0.35, ease: [0.16, 1, 0.3, 1] }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: reducedMotion ? 0 : 0.25, ease: [0.16, 1, 0.3, 1] }}
             />
 
             {/* Historical Solid Curve */}
@@ -265,11 +280,11 @@ export const ForecastView: React.FC<ForecastViewProps> = ({
               strokeWidth="2.8"
               strokeLinecap="round"
               initial={reducedMotion ? false : { opacity: 0 }}
-              animate={{ d: histPath, opacity: 1 }}
-              transition={{ duration: reducedMotion ? 0 : 0.35, ease: [0.16, 1, 0.3, 1] }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: reducedMotion ? 0 : 0.25, ease: [0.16, 1, 0.3, 1] }}
             />
 
-            {/* Predictive Dashed Projection Curve (never combine pathLength with strokeDasharray) */}
+            {/* Predictive Dashed Projection Curve */}
             <motion.path
               key={`proj-${horizon}`}
               d={projPath}
@@ -279,36 +294,33 @@ export const ForecastView: React.FC<ForecastViewProps> = ({
               strokeDasharray="6 5"
               strokeLinecap="round"
               initial={reducedMotion ? false : { opacity: 0 }}
-              animate={{ d: projPath, opacity: 1 }}
-              transition={{ duration: reducedMotion ? 0 : 0.35, ease: [0.16, 1, 0.3, 1] }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: reducedMotion ? 0 : 0.25, ease: [0.16, 1, 0.3, 1] }}
             />
 
-            {/* Scrub Cursor */}
-            <motion.line
-              animate={{ x1: activeCoord.x, x2: activeCoord.x }}
+            {/* Scrub Cursor (GPU group transform) */}
+            <motion.g
+              animate={{ x: activeCoord.x }}
               transition={reducedMotion ? { duration: 0 } : SPRING_SNAPPY}
-              y1={activeCoord.y}
-              y2={height}
-              stroke="#0F172A"
-              strokeOpacity="0.3"
-              strokeWidth="1.3"
-              strokeDasharray="3 3"
-            />
-            <motion.circle
-              animate={{ cx: activeCoord.x, cy: activeCoord.y }}
+            >
+              <line
+                x1={0}
+                x2={0}
+                y1={activeCoord.y}
+                y2={height}
+                stroke="#0F172A"
+                strokeOpacity="0.3"
+                strokeWidth="1.3"
+                strokeDasharray="3 3"
+              />
+            </motion.g>
+            <motion.g
+              animate={{ x: activeCoord.x, y: activeCoord.y }}
               transition={reducedMotion ? { duration: 0 } : SPRING_SNAPPY}
-              r="9"
-              fill="#92E634"
-              fillOpacity="0.35"
-            />
-            <motion.circle
-              animate={{ cx: activeCoord.x, cy: activeCoord.y }}
-              transition={reducedMotion ? { duration: 0 } : SPRING_SNAPPY}
-              r="4.5"
-              fill="#141619"
-              stroke="#92E634"
-              strokeWidth="2.2"
-            />
+            >
+              <circle cx={0} cy={0} r="9" fill="#92E634" fillOpacity="0.35" />
+              <circle cx={0} cy={0} r="4.5" fill="#141619" stroke="#92E634" strokeWidth="2.2" />
+            </motion.g>
           </svg>
         </div>
 

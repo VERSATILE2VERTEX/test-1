@@ -1,18 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Activity,
   BarChart3,
   Bell,
+  CheckCircle2,
   ChevronRight,
   ClipboardList,
+  HeartHandshake,
+  Info,
   LayoutDashboard,
-  Menu,
+  MessageSquare,
   Package,
   Plus,
   RotateCcw,
   Search,
-  Sparkles,
+  Undo2,
   Volume2,
   VolumeX,
   X,
@@ -23,11 +26,12 @@ import {
   INITIAL_WASTE_LOGS,
   OUTLETS,
 } from './data/initialData';
-import { DISPOSITION_LABELS, TRANSLATIONS } from './i18n/translations';
+import { DISPOSITION_LABELS, formatBdt, TRANSLATIONS } from './i18n/translations';
 import {
   InventoryCategory,
   InventoryItem,
   Locale,
+  ToastActionMessage,
   ViewTab,
   WasteDisposition,
   WasteLogEntry,
@@ -35,9 +39,11 @@ import {
 import { formatShelfLife } from './utils/inventoryUtils';
 import { OverviewView } from './components/OverviewView';
 import { InventoryView } from './components/InventoryView';
+import { RescueView } from './components/RescueView';
 import { ForecastView } from './components/ForecastView';
 import { WasteLogView } from './components/WasteLogView';
-import { AddStockModal, LogWasteModal } from './components/ActionModals';
+import { AddStockModal, LogWasteModal, RescueModal } from './components/ActionModals';
+import { AboutGuideFooter } from './components/AboutGuideFooter';
 import {
   AmbientLightBackdrop,
   ScrollWobbleContainer,
@@ -46,6 +52,8 @@ import {
 } from './components/MotionPrimitives';
 import { soundEngine } from './utils/soundEngine';
 import { LiquidGlassIntro } from './components/LiquidGlassIntro';
+import { KhadokChatWidget, KitchenChatContext } from './components/KhadokChatWidget';
+import { MagnificationDock, DockItemData } from './components/MagnificationDock';
 
 const STORAGE_KEY = 'khadok_workspace_v3';
 const INTRO_SESSION_KEY = 'khadok_intro_seen';
@@ -119,9 +127,19 @@ export default function App() {
   const [categoryFilter, setCategoryFilter] = useState<'all' | InventoryCategory>('all');
   const [headerSearchOpen, setHeaderSearchOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [addModalOpen, setAddModalOpen] = useState(false);
-  const [wasteModalOpen, setWasteModalOpen] = useState(false);
+  const [rescueModalState, setRescueModalState] = useState<{
+    open: boolean;
+    itemId: string | null;
+  }>({ open: false, itemId: null });
+  const [wasteModalState, setWasteModalState] = useState<{
+    open: boolean;
+    itemId: string | null;
+  }>({ open: false, itemId: null });
+  const [chatOpen, setChatOpen] = useState(false);
+  const [toast, setToast] = useState<ToastActionMessage | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+
   const [introVisible, setIntroVisible] = useState<boolean>(() => {
     try {
       return sessionStorage.getItem(INTRO_SESSION_KEY) !== 'true';
@@ -145,6 +163,13 @@ export default function App() {
   }, [locale, reducedMotion]);
 
   useEffect(() => {
+    if (!introVisible) {
+      document.body.style.overflow = '';
+      document.documentElement.style.overflow = '';
+    }
+  }, [introVisible]);
+
+  useEffect(() => {
     try {
       const payload: PersistedState = {
         locale,
@@ -160,6 +185,29 @@ export default function App() {
       // Ignore storage quota errors
     }
   }, [locale, outletId, inventory, wasteLogs, forecastMultiplier, watchedIds, reducedMotion]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
+  const showToast = useCallback((nextToast: ToastActionMessage) => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    setToast(nextToast);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+    }, 5500);
+  }, []);
+
+  const handleUndoToast = () => {
+    if (!toast) return;
+    soundEngine.playToggle(true);
+    setInventory(toast.prevInventory);
+    setWasteLogs(toast.prevWasteLogs);
+    setToast(null);
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+  };
 
   const handleToggleSound = () => {
     const next = !soundEnabled;
@@ -193,25 +241,44 @@ export default function App() {
   };
 
   const handleAddStock = (newItem: Omit<InventoryItem, 'id' | 'lastUpdated'>) => {
+    const prevInventorySnapshot = inventory;
+    const prevWasteSnapshot = wasteLogs;
+
     const entry: InventoryItem = {
       ...newItem,
       id: `inv-${Date.now()}`,
       lastUpdated: locale === 'bn' ? 'এইমাত্র' : 'Just now',
     };
     setInventory((prev) => [entry, ...prev]);
+
+    const itemLabel = locale === 'bn' ? entry.nameBn : entry.nameEn;
+    showToast({
+      id: `toast-${Date.now()}`,
+      kind: 'stock',
+      title: locale === 'bn' ? `মজুদ যোগ হয়েছে: ${itemLabel}` : `Added Stock: ${itemLabel}`,
+      subtitle: `${entry.quantity} ${entry.unit} · ${formatBdt(
+        entry.quantity * entry.unitCostBdt,
+        locale
+      )}`,
+      prevInventory: prevInventorySnapshot,
+      prevWasteLogs: prevWasteSnapshot,
+    });
   };
 
-  const handleLogWaste = (
+  const handleLogWasteOrRescue = (
     itemId: string,
     qty: number,
     disposition: WasteDisposition,
     note: string
   ) => {
     const target = inventory.find((i) => i.id === itemId);
-    if (!target) return;
+    if (!target || target.quantity <= 0) return;
 
+    const prevInventorySnapshot = inventory;
+    const prevWasteSnapshot = wasteLogs;
     const actualQty = Math.min(target.quantity, qty);
     const valueBdt = Math.round(actualQty * target.unitCostBdt);
+    const isRescue = DISPOSITION_LABELS[disposition].isRescue;
 
     const newLog: WasteLogEntry = {
       id: `wl-${Date.now()}`,
@@ -239,6 +306,25 @@ export default function App() {
           : item
       )
     );
+
+    const itemLabel = locale === 'bn' ? target.nameBn : target.nameEn;
+    showToast({
+      id: `toast-${Date.now()}`,
+      kind: isRescue ? 'rescue' : 'waste',
+      title: isRescue
+        ? locale === 'bn'
+          ? `উদ্ধার সম্পন্ন: ${itemLabel}`
+          : `Rescued: ${itemLabel}`
+        : locale === 'bn'
+        ? `অপচয় নথিভুক্ত: ${itemLabel}`
+        : `Logged Waste: ${itemLabel}`,
+      subtitle: `${actualQty} ${target.unit} · ${isRescue ? '+' : '-'}${formatBdt(
+        valueBdt,
+        locale
+      )}`,
+      prevInventory: prevInventorySnapshot,
+      prevWasteLogs: prevWasteSnapshot,
+    });
   };
 
   const handleQuickDisposition = (
@@ -247,7 +333,22 @@ export default function App() {
     qty: number
   ) => {
     const note = DISPOSITION_LABELS[disposition][locale];
-    handleLogWaste(item.id, qty, disposition, note);
+    if (DISPOSITION_LABELS[disposition].isRescue) {
+      soundEngine.playChime();
+    } else {
+      soundEngine.playWasteThud();
+    }
+    handleLogWasteOrRescue(item.id, qty, disposition, note);
+  };
+
+  const handleReplayIntro = () => {
+    soundEngine.playGlassPop();
+    try {
+      sessionStorage.removeItem(INTRO_SESSION_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+    setIntroVisible(true);
   };
 
   const handleResetDemo = () => {
@@ -259,58 +360,49 @@ export default function App() {
     setWatchedIds(['inv-2', 'inv-3', 'inv-8']);
     setInventorySearch('');
     setCategoryFilter('all');
+    setToast(null);
   };
 
   const navItems: Array<{ id: ViewTab; label: string; icon: typeof LayoutDashboard }> = [
     { id: 'overview', label: t.navOverview, icon: LayoutDashboard },
     { id: 'inventory', label: t.navInventory, icon: Package },
-    { id: 'forecast', label: t.navForecast, icon: BarChart3 },
+    { id: 'rescue', label: t.navRescue, icon: HeartHandshake },
     { id: 'waste', label: t.navWaste, icon: ClipboardList },
+    { id: 'forecast', label: t.navForecast, icon: BarChart3 },
   ];
 
   const activeNavLabel = navItems.find((n) => n.id === activeTab)?.label ?? t.navOverview;
 
   return (
-    <div className="relative min-h-screen flex bg-white text-[#0F172A] p-0 lg:p-4 gap-0 lg:gap-4 overflow-x-hidden">
+    <div className="relative min-h-screen flex flex-col bg-white text-[#0F172A] p-0 sm:p-3 lg:p-4 overflow-x-clip">
       {/* Crisp White Backdrop with Soft Pastel Refraction Halos */}
       <AmbientLightBackdrop reducedMotion={reducedMotion} />
 
-      {/* Mobile Sidebar Backdrop */}
-      <AnimatePresence>
-        {mobileMenuOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-sm lg:hidden"
-            onClick={() => setMobileMenuOpen(false)}
-            aria-hidden="true"
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Dark Charcoal Left Navigation Rail (Reference Image 1) */}
-      <aside
-        className={`fixed lg:sticky top-0 lg:top-4 left-0 z-50 h-screen lg:h-[calc(100vh-2rem)] w-64 bg-[#141517] text-white lg:rounded-[28px] border border-slate-800/80 shadow-[0_24px_48px_-18px_rgba(15,23,42,0.28)] flex flex-col justify-between transition-transform duration-200 lg:translate-x-0 shrink-0 ${
-          mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
-      >
-        <div>
-          {/* Warm Ivory Squircle Brand Block */}
-          <div className="px-5 pt-6 pb-5 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <motion.div
-                whileHover={!reducedMotion ? { rotate: -6, scale: 1.07 } : undefined}
-                whileTap={!reducedMotion ? { scale: 0.94 } : undefined}
-                transition={SPRING_SNAPPY}
-                className="w-11 h-11 rounded-2xl bg-[#F6F1E2] flex items-center justify-center shadow-sm shrink-0"
-              >
+      {/* Main White Liquid Glass Collage Frame */}
+      <div className="glass-panel relative z-10 flex-1 min-w-0 sm:rounded-[28px] flex flex-col overflow-x-clip">
+        {/* Frosted White Top Utility Header */}
+        <header className="sticky top-0 z-30 bg-white/88 backdrop-blur-2xl border-b border-slate-200/70 sm:rounded-t-[28px] px-3.5 sm:px-6 py-3.5 flex items-center justify-between gap-3">
+          {/* Left: Brand Emblem + View Title + Outlet Switcher */}
+          <div className="flex items-center gap-3 min-w-0">
+            <motion.button
+              type="button"
+              whileHover={!reducedMotion ? { rotate: -6, scale: 1.06 } : undefined}
+              whileTap={!reducedMotion ? { scale: 0.94 } : undefined}
+              transition={SPRING_SNAPPY}
+              onClick={() => {
+                soundEngine.playTick();
+                setActiveTab('overview');
+              }}
+              aria-label={t.brandName}
+              className="w-10 h-10 rounded-2xl bg-[#141517] flex items-center justify-center shadow-sm shrink-0 cursor-pointer border border-white"
+            >
+              <div className="w-7 h-7 rounded-xl bg-[#F6F1E2] flex items-center justify-center">
                 <svg
                   viewBox="0 0 24 24"
-                  className="w-5 h-5 text-[#141517]"
+                  className="w-4 h-4 text-[#141517]"
                   fill="none"
                   stroke="currentColor"
-                  strokeWidth="2.3"
+                  strokeWidth="2.4"
                 >
                   <path
                     d="M5 19C5 11.268 11.268 5 19 5C19 12.732 12.732 19 5 19Z"
@@ -318,166 +410,53 @@ export default function App() {
                   />
                   <path d="M7 17L16 8" strokeLinecap="round" />
                 </svg>
-              </motion.div>
-              <div>
-                <span className="font-display text-2xl font-bold tracking-wide text-white block leading-none">
+              </div>
+            </motion.button>
+
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-display text-2xl sm:text-[28px] font-bold tracking-tight text-[#0F172A] leading-none whitespace-nowrap">
                   {t.brandName}
                 </span>
-                <span className="text-[11px] text-slate-400 mt-1 block">{t.tagline}</span>
+                <span className="text-slate-300 hidden sm:inline" aria-hidden="true">/</span>
+                <h1 className="font-display text-xl sm:text-2xl font-bold tracking-tight text-slate-600 truncate leading-none hidden sm:block">
+                  {activeNavLabel}
+                </h1>
+              </div>
+
+              {/* Compact Kitchen Outlet Switcher */}
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <select
+                  id="outlet-select"
+                  aria-label={t.outletLabel}
+                  value={outletId}
+                  onChange={(e) => {
+                    soundEngine.playTick(50);
+                    setOutletId(e.target.value);
+                  }}
+                  className="max-w-[165px] sm:max-w-[240px] truncate bg-transparent text-[11px] font-semibold text-slate-500 hover:text-[#0F172A] focus:outline-none cursor-pointer"
+                >
+                  {OUTLETS.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {locale === 'bn' ? o.nameBn : o.nameEn}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setMobileMenuOpen(false)}
-              className="lg:hidden p-1.5 text-slate-400 hover:text-white rounded-lg cursor-pointer"
-              aria-label="Close navigation"
-            >
-              <X className="w-4 h-4" />
-            </button>
           </div>
 
-          {/* Outlet Switcher */}
-          <div className="px-4 pb-4 border-b border-white/10">
-            <label htmlFor="outlet-select" className="block text-[11px] font-medium text-slate-400 mb-1.5">
-              {t.outletLabel}
-            </label>
-            <select
-              id="outlet-select"
-              value={outletId}
-              onChange={(e) => {
-                soundEngine.playTick(50);
-                setOutletId(e.target.value);
-              }}
-              className="w-full px-3 py-2 text-xs font-semibold bg-white/8 border border-white/14 rounded-xl text-white focus:outline-none focus:border-[#92E634] cursor-pointer"
-            >
-              {OUTLETS.map((o) => (
-                <option key={o.id} value={o.id} className="bg-[#141517] text-white">
-                  {locale === 'bn' ? o.nameBn : o.nameEn}
-                </option>
-              ))}
-            </select>
-            <p className="mt-1.5 text-[11px] text-slate-400 truncate px-0.5">
-              {locale === 'bn' ? currentOutlet.neighborhoodBn : currentOutlet.neighborhoodEn}
-            </p>
-          </div>
-
-          {/* Navigation with Spring Overshoot Icons & Lime Pill */}
-          <nav className="p-3 space-y-1.5 mt-2" aria-label="Main Navigation">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              return (
-                <motion.button
-                  key={item.id}
-                  type="button"
-                  whileHover={!reducedMotion ? { x: 4 } : undefined}
-                  whileTap={!reducedMotion ? { scale: 0.96 } : undefined}
-                  transition={SPRING_SNAPPY}
-                  onClick={() => {
-                    soundEngine.playTick();
-                    setActiveTab(item.id);
-                    setMobileMenuOpen(false);
-                  }}
-                  className={`relative w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-semibold rounded-2xl transition-colors whitespace-nowrap cursor-pointer ${
-                    isActive ? 'text-[#0F172A]' : 'text-slate-300 hover:text-white'
-                  }`}
-                >
-                  {isActive && (
-                    <motion.span
-                      layoutId="sidebar-active-pill"
-                      transition={SPRING_SNAPPY}
-                      className="glass-lime-accent absolute inset-0 rounded-2xl"
-                    />
-                  )}
-                  <motion.span
-                    className="relative z-10 inline-flex"
-                    animate={
-                      isActive && !reducedMotion
-                        ? { scale: [1, 1.2, 1], rotate: [0, -6, 0] }
-                        : { scale: 1, rotate: 0 }
-                    }
-                    transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-                  >
-                    <Icon className="w-4 h-4 shrink-0" />
-                  </motion.span>
-                  <span className="relative z-10">{item.label}</span>
-                </motion.button>
-              );
-            })}
-          </nav>
-        </div>
-
-        {/* Sidebar Footer */}
-        <div className="p-4 border-t border-white/10 space-y-2">
-          <motion.button
-            type="button"
-            whileHover={!reducedMotion ? { scale: 1.02 } : undefined}
-            whileTap={!reducedMotion ? { scale: 0.96 } : undefined}
-            onClick={() => {
-              soundEngine.playChime();
-              try {
-                sessionStorage.removeItem(INTRO_SESSION_KEY);
-              } catch {
-                // Ignore storage errors
-              }
-              setMobileMenuOpen(false);
-              setIntroVisible(true);
-            }}
-            className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold text-[#92E634] bg-[#92E634]/10 border border-[#92E634]/25 rounded-xl hover:bg-[#92E634]/20 transition-colors whitespace-nowrap cursor-pointer"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>{locale === 'bn' ? 'ইন্ট্রো পুনরায় দেখুন' : 'Replay Intro'}</span>
-          </motion.button>
-
-          <motion.button
-            type="button"
-            whileHover={!reducedMotion ? { scale: 1.02 } : undefined}
-            whileTap={!reducedMotion ? { scale: 0.96 } : undefined}
-            onClick={handleResetDemo}
-            className="w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-semibold text-slate-300 bg-white/6 border border-white/12 rounded-xl hover:bg-white/12 hover:text-white transition-colors whitespace-nowrap cursor-pointer"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>{t.resetDemo}</span>
-          </motion.button>
-        </div>
-      </aside>
-
-      {/* Main White Liquid Glass Collage Frame */}
-      <div className="glass-panel relative z-10 flex-1 min-w-0 lg:rounded-[28px] flex flex-col overflow-x-clip">
-        {/* Frosted White Header Bar */}
-        <header className="sticky top-0 z-30 bg-white/85 backdrop-blur-2xl border-b border-slate-200/70 lg:rounded-t-[28px] px-4 sm:px-7 py-4 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={() => {
-                soundEngine.playClick();
-                setMobileMenuOpen(true);
-              }}
-              className="lg:hidden p-2 -ml-2 text-slate-700 hover:text-[#0F172A] rounded-xl hover:bg-slate-100 cursor-pointer"
-              aria-label="Open menu"
-            >
-              <Menu className="w-5 h-5" />
-            </button>
-            <div className="min-w-0">
-              <h1 className="font-display text-3xl sm:text-[32px] font-bold tracking-tight text-[#0F172A] truncate leading-none">
-                {activeNavLabel}
-              </h1>
-              <p className="text-xs text-slate-500 truncate hidden sm:block mt-1">
-                {locale === 'bn' ? currentOutlet.nameBn : currentOutlet.nameEn}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
-            {/* Expandable Search */}
+          {/* Right: Utility Controls */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* GPU-only Expandable Search */}
             <AnimatePresence>
               {headerSearchOpen && (
                 <motion.div
-                  initial={reducedMotion ? false : { width: 0, opacity: 0 }}
-                  animate={{ width: 200, opacity: 1 }}
-                  exit={{ width: 0, opacity: 0 }}
-                  transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-                  className="overflow-hidden hidden md:block"
+                  initial={reducedMotion ? false : { opacity: 0, scale: 0.92, x: 10 }}
+                  animate={{ opacity: 1, scale: 1, x: 0 }}
+                  exit={{ opacity: 0, scale: 0.92, x: 10 }}
+                  transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                  className="hidden md:block w-48"
                 >
                   <input
                     type="text"
@@ -496,7 +475,7 @@ export default function App() {
 
             <motion.button
               type="button"
-              whileHover={!reducedMotion ? { scale: 1.08 } : undefined}
+              whileHover={!reducedMotion ? { scale: 1.07 } : undefined}
               whileTap={!reducedMotion ? { scale: 0.92 } : undefined}
               onClick={() => {
                 soundEngine.playClick();
@@ -506,7 +485,7 @@ export default function App() {
                 }
               }}
               aria-label="Search inventory"
-              className={`p-2.5 rounded-full border transition-colors cursor-pointer ${
+              className={`hidden sm:inline-flex p-2.5 rounded-full border transition-colors cursor-pointer ${
                 headerSearchOpen
                   ? 'bg-[#141517] text-white border-[#141517]'
                   : 'glass-pill-cell text-slate-700 hover:text-[#0F172A]'
@@ -515,32 +494,21 @@ export default function App() {
               <Search className="w-4 h-4" />
             </motion.button>
 
-            {/* Dampened Pendulum Swing Notification Bell */}
+            {/* Expiry Notification Bell */}
             <div className="relative">
               <motion.button
                 type="button"
-                whileHover={!reducedMotion ? { scale: 1.08 } : undefined}
+                whileHover={!reducedMotion ? { scale: 1.07, rotate: -10 } : undefined}
                 whileTap={!reducedMotion ? { scale: 0.92 } : undefined}
-                transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
                 onClick={() => {
                   soundEngine.playTick(140);
                   setNotificationsOpen((prev) => !prev);
                 }}
                 aria-label="Expiring item alerts"
-                className="glass-pill-cell relative p-2.5 rounded-full text-slate-700 hover:text-[#0F172A] transition-colors cursor-pointer"
+                className="glass-pill-cell relative p-2 sm:p-2.5 rounded-full text-slate-700 hover:text-[#0F172A] transition-colors cursor-pointer"
               >
-                <motion.span
-                  className="inline-flex"
-                  style={{ transformOrigin: 'top center' }}
-                  animate={
-                    urgentItems.length > 0 && !reducedMotion
-                      ? { rotate: [0, -12, 10, -7, 4, 0] }
-                      : { rotate: 0 }
-                  }
-                  transition={{ duration: 0.7, repeat: Infinity, repeatDelay: 6 }}
-                >
-                  <Bell className="w-4 h-4" />
-                </motion.span>
+                <Bell className="w-4 h-4" />
                 {urgentItems.length > 0 && (
                   <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#EF4444]" />
                 )}
@@ -553,7 +521,7 @@ export default function App() {
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 6, scale: 0.96 }}
                     transition={SPRING_SNAPPY}
-                    className="glass-panel squircle-24 absolute right-0 mt-2 w-80 p-4 z-50 bg-white/92"
+                    className="glass-panel squircle-24 absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] p-4 z-50 bg-white/95"
                   >
                     <div className="flex items-center justify-between pb-2.5 border-b border-slate-200/70">
                       <span className="text-xs font-bold text-[#0F172A]">
@@ -578,8 +546,7 @@ export default function App() {
                             onClick={() => {
                               soundEngine.playClick();
                               setNotificationsOpen(false);
-                              setActiveTab('inventory');
-                              setInventorySearch(locale === 'bn' ? item.nameBn : item.nameEn);
+                              setActiveTab('rescue');
                             }}
                             className="w-full py-2.5 flex items-center justify-between gap-2 text-left hover:bg-slate-50 rounded-lg px-1.5 transition-colors cursor-pointer"
                           >
@@ -602,16 +569,45 @@ export default function App() {
               </AnimatePresence>
             </div>
 
+            {/* Info / Replay Intro Trigger */}
+            <motion.button
+              type="button"
+              whileHover={!reducedMotion ? { scale: 1.05 } : undefined}
+              whileTap={!reducedMotion ? { scale: 0.92 } : undefined}
+              onClick={handleReplayIntro}
+              title={locale === 'bn' ? 'অ্যাপ পরিচিতি দেখুন' : 'About / Replay Intro'}
+              aria-label={locale === 'bn' ? 'অ্যাপ পরিচিতি দেখুন' : 'About / Replay Intro'}
+              className="glass-pill-cell inline-flex items-center gap-1.5 p-2 sm:px-3 sm:py-2 rounded-full text-xs font-bold text-[#0F172A] hover:border-[#92E634] transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <Info className="w-3.5 h-3.5 text-[#16A34A]" />
+              <span className="hidden lg:inline">
+                {locale === 'bn' ? 'তথ্য' : 'Info'}
+              </span>
+            </motion.button>
+
+            {/* Reset Demo Data */}
+            <motion.button
+              type="button"
+              whileHover={!reducedMotion ? { scale: 1.07, rotate: -30 } : undefined}
+              whileTap={!reducedMotion ? { scale: 0.92 } : undefined}
+              onClick={handleResetDemo}
+              title={t.resetDemo}
+              aria-label={t.resetDemo}
+              className="glass-pill-cell hidden sm:inline-flex p-2.5 rounded-full text-slate-600 hover:text-[#0F172A] transition-colors cursor-pointer"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </motion.button>
+
             {/* Sound Mute / Unmute Toggle */}
             <motion.button
               type="button"
-              whileHover={!reducedMotion ? { scale: 1.08 } : undefined}
+              whileHover={!reducedMotion ? { scale: 1.07 } : undefined}
               whileTap={!reducedMotion ? { scale: 0.9 } : undefined}
               onClick={handleToggleSound}
               title={soundEnabled ? 'Mute UI Sounds' : 'Enable UI Sounds'}
               aria-label={soundEnabled ? 'Mute UI Sounds' : 'Enable UI Sounds'}
               aria-pressed={soundEnabled}
-              className="glass-pill-cell p-2.5 rounded-full text-slate-700 hover:text-[#0F172A] transition-colors cursor-pointer"
+              className="glass-pill-cell p-2 sm:p-2.5 rounded-full text-slate-700 hover:text-[#0F172A] transition-colors cursor-pointer"
             >
               {soundEnabled ? (
                 <Volume2 className="w-4 h-4 text-[#16A34A]" />
@@ -623,13 +619,13 @@ export default function App() {
             {/* Reduced Motion Toggle */}
             <motion.button
               type="button"
-              whileHover={!reducedMotion ? { scale: 1.08 } : undefined}
+              whileHover={!reducedMotion ? { scale: 1.07 } : undefined}
               whileTap={!reducedMotion ? { scale: 0.9 } : undefined}
               onClick={handleToggleMotion}
               title={reducedMotion ? 'Enable Full Motion' : 'Reduce Motion'}
               aria-label={reducedMotion ? 'Enable Full Motion' : 'Reduce Motion'}
               aria-pressed={!reducedMotion}
-              className={`glass-pill-cell hidden sm:inline-flex p-2.5 rounded-full transition-colors cursor-pointer ${
+              className={`glass-pill-cell hidden md:inline-flex p-2.5 rounded-full transition-colors cursor-pointer ${
                 !reducedMotion ? 'text-[#16A34A]' : 'text-slate-400'
               }`}
             >
@@ -648,7 +644,7 @@ export default function App() {
                   soundEngine.playTick();
                   setLocale('en');
                 }}
-                className={`px-2.5 py-1 text-xs font-bold rounded-full transition-colors whitespace-nowrap cursor-pointer ${
+                className={`px-2 sm:px-2.5 py-1 text-[11px] sm:text-xs font-bold rounded-full transition-colors whitespace-nowrap cursor-pointer ${
                   locale === 'en' ? 'bg-white text-[#0F172A] shadow-xs' : 'text-slate-500 hover:text-[#0F172A]'
                 }`}
               >
@@ -660,7 +656,7 @@ export default function App() {
                   soundEngine.playTick();
                   setLocale('bn');
                 }}
-                className={`px-2.5 py-1 text-xs font-bold rounded-full transition-colors whitespace-nowrap cursor-pointer ${
+                className={`px-2 sm:px-2.5 py-1 text-[11px] sm:text-xs font-bold rounded-full transition-colors whitespace-nowrap cursor-pointer ${
                   locale === 'bn' ? 'bg-white text-[#0F172A] shadow-xs' : 'text-slate-500 hover:text-[#0F172A]'
                 }`}
               >
@@ -668,13 +664,13 @@ export default function App() {
               </button>
             </div>
 
-            {/* Primary CTA Button with Water Ripple & Sheen */}
+            {/* Primary + Add Stock CTA */}
             <WaterRippleButton
               type="button"
               soundType="whoosh"
               reducedMotion={reducedMotion}
               onClick={() => setAddModalOpen(true)}
-              className="glass-lime-accent px-4 py-2 text-xs font-bold text-[#0F172A] rounded-full whitespace-nowrap shrink-0 cursor-pointer"
+              className="glass-lime-accent px-3 sm:px-4 py-2 text-xs font-bold text-[#0F172A] rounded-full whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{t.addStock.replace(/^\+\s*/, '')}</span>
@@ -682,8 +678,8 @@ export default function App() {
           </div>
         </header>
 
-        {/* Active Workspace Viewport with Scroll-Linked Jelly Wobble */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1360px] w-full mx-auto">
+        {/* Active Workspace Viewport */}
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-28 sm:pb-28 max-w-[1360px] w-full mx-auto">
           <ScrollWobbleContainer reducedMotion={reducedMotion}>
             <AnimatePresence mode="wait">
               {activeTab === 'overview' && (
@@ -713,7 +709,7 @@ export default function App() {
                       setCategoryFilter(cat);
                       setActiveTab('inventory');
                     }}
-                    onOpenWasteModal={() => setWasteModalOpen(true)}
+                    onOpenWasteModal={() => setWasteModalState({ open: true, itemId: null })}
                   />
                 </motion.div>
               )}
@@ -738,6 +734,48 @@ export default function App() {
                     onToggleWatch={handleToggleWatch}
                     onAdjustQuantity={handleAdjustQuantity}
                     onOpenAddModal={() => setAddModalOpen(true)}
+                    onOpenRescueForItem={(id) => setRescueModalState({ open: true, itemId: id })}
+                    onOpenWasteForItem={(id) => setWasteModalState({ open: true, itemId: id })}
+                  />
+                </motion.div>
+              )}
+
+              {activeTab === 'rescue' && (
+                <motion.div
+                  key="rescue"
+                  initial={reducedMotion ? false : { opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={reducedMotion ? undefined : { opacity: 0, y: -4 }}
+                  transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                >
+                  <RescueView
+                    locale={locale}
+                    inventory={inventory}
+                    wasteLogs={wasteLogs}
+                    reducedMotion={reducedMotion}
+                    onQuickRescue={(item, channel, qty) => {
+                      handleQuickDisposition(item, channel, qty);
+                    }}
+                    onOpenRescueModal={(id) =>
+                      setRescueModalState({ open: true, itemId: id ?? null })
+                    }
+                  />
+                </motion.div>
+              )}
+
+              {activeTab === 'waste' && (
+                <motion.div
+                  key="waste"
+                  initial={reducedMotion ? false : { opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={reducedMotion ? undefined : { opacity: 0, y: -4 }}
+                  transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                >
+                  <WasteLogView
+                    locale={locale}
+                    wasteLogs={wasteLogs}
+                    reducedMotion={reducedMotion}
+                    onOpenWasteModal={() => setWasteModalState({ open: true, itemId: null })}
                   />
                 </motion.div>
               )}
@@ -760,28 +798,21 @@ export default function App() {
                   />
                 </motion.div>
               )}
-
-              {activeTab === 'waste' && (
-                <motion.div
-                  key="waste"
-                  initial={reducedMotion ? false : { opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={reducedMotion ? undefined : { opacity: 0, y: -4 }}
-                  transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-                >
-                  <WasteLogView
-                    locale={locale}
-                    wasteLogs={wasteLogs}
-                    reducedMotion={reducedMotion}
-                    onOpenWasteModal={() => setWasteModalOpen(true)}
-                  />
-                </motion.div>
-              )}
             </AnimatePresence>
+
+            {/* Bottom About & Quick Guide Recap */}
+            <AboutGuideFooter
+              locale={locale}
+              reducedMotion={reducedMotion}
+              onNavigate={(tab) => setActiveTab(tab)}
+              onOpenAddStock={() => setAddModalOpen(true)}
+              onReplayIntro={handleReplayIntro}
+            />
           </ScrollWobbleContainer>
         </main>
       </div>
 
+      {/* Add Stock, Rescue & Log Waste Modals */}
       <AddStockModal
         open={addModalOpen}
         locale={locale}
@@ -790,14 +821,194 @@ export default function App() {
         onSave={handleAddStock}
       />
 
-      <LogWasteModal
-        open={wasteModalOpen}
+      <RescueModal
+        open={rescueModalState.open}
         locale={locale}
         inventory={inventory}
+        preselectedItemId={rescueModalState.itemId}
         reducedMotion={reducedMotion}
-        onClose={() => setWasteModalOpen(false)}
-        onSave={handleLogWaste}
+        onClose={() => setRescueModalState({ open: false, itemId: null })}
+        onRescue={(itemId, qty, channel, note) => {
+          handleLogWasteOrRescue(itemId, qty, channel, note);
+        }}
       />
+
+      <LogWasteModal
+        open={wasteModalState.open}
+        locale={locale}
+        inventory={inventory}
+        preselectedItemId={wasteModalState.itemId}
+        reducedMotion={reducedMotion}
+        onClose={() => setWasteModalState({ open: false, itemId: null })}
+        onSave={handleLogWasteOrRescue}
+      />
+
+      {/* Liquid-Glass Confirmation & Undo Toast */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            key={toast.id}
+            initial={reducedMotion ? false : { opacity: 0, y: 16, scale: 0.94 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+            transition={SPRING_SNAPPY}
+            role="status"
+            aria-live="polite"
+            className="glass-panel squircle-24 fixed bottom-24 left-1/2 -translate-x-1/2 sm:left-auto sm:right-6 sm:translate-x-0 z-50 w-[calc(100vw-2rem)] sm:w-96 px-4 py-3 flex items-center justify-between gap-3 bg-white/95 shadow-[0_20px_48px_-14px_rgba(15,23,42,0.22)]"
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <CheckCircle2
+                className={`w-4.5 h-4.5 shrink-0 ${
+                  toast.kind === 'waste' ? 'text-[#DC2626]' : 'text-[#16A34A]'
+                }`}
+              />
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-[#0F172A] truncate">{toast.title}</p>
+                <p className="text-[11px] font-semibold text-slate-500 tabular-nums truncate">
+                  {toast.subtitle}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={handleUndoToast}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#92E634]/30 hover:bg-[#92E634] text-[11px] font-bold text-[#0F172A] transition-colors cursor-pointer"
+              >
+                <Undo2 className="w-3 h-3" />
+                <span>{locale === 'bn' ? 'পূর্বাবস্থায়' : 'Undo'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setToast(null)}
+                aria-label="Dismiss notification"
+                className="p-1 text-slate-400 hover:text-[#0F172A] cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {(() => {
+        const totalStockValueBdt = inventory.reduce(
+          (sum, i) => sum + i.quantity * i.unitCostBdt,
+          0
+        );
+        const rescuedValueBdt = wasteLogs
+          .filter((w) => DISPOSITION_LABELS[w.disposition].isRescue)
+          .reduce((sum, w) => sum + w.valueBdt, 0);
+        const lossValueBdt = wasteLogs
+          .filter((w) => !DISPOSITION_LABELS[w.disposition].isRescue)
+          .reduce((sum, w) => sum + w.valueBdt, 0);
+
+        const kitchenContext: KitchenChatContext = {
+          locale,
+          outletName: locale === 'bn' ? currentOutlet.nameBn : currentOutlet.nameEn,
+          forecastMultiplier,
+          totalStockValueBdt,
+          rescuedValueBdt,
+          lossValueBdt,
+          urgentItems: urgentItems.slice(0, 6).map((i) => ({
+            name: locale === 'bn' ? i.nameBn : i.nameEn,
+            quantity: i.quantity,
+            unit: i.unit,
+            hoursLeft: i.hoursUntilExpiry,
+            valueBdt: Math.round(i.quantity * i.unitCostBdt),
+          })),
+          allInventory: inventory.map((i) => ({
+            name: locale === 'bn' ? i.nameBn : i.nameEn,
+            category: i.category,
+            quantity: i.quantity,
+            unit: i.unit,
+            hoursLeft: i.hoursUntilExpiry,
+            minThreshold: i.minThreshold,
+            valueBdt: Math.round(i.quantity * i.unitCostBdt),
+          })),
+          topDishes: INITIAL_DISHES.map((d) => ({
+            name: locale === 'bn' ? d.nameBn : d.nameEn,
+            targetPortions: Math.round(d.baselineDailyPortions * forecastMultiplier),
+            sellingPriceBdt: d.sellingPriceBdt,
+          })),
+          recentWasteLogs: wasteLogs.slice(0, 6).map((w) => ({
+            item: locale === 'bn' ? w.itemNameBn : w.itemNameEn,
+            disposition: DISPOSITION_LABELS[w.disposition][locale],
+            quantity: w.quantity,
+            unit: w.unit,
+            valueBdt: w.valueBdt,
+          })),
+        };
+
+        const dockItems: DockItemData[] = [
+          {
+            icon: <LayoutDashboard className="w-[18px] h-[18px]" />,
+            label: t.navOverview,
+            active: activeTab === 'overview',
+            onClick: () => setActiveTab('overview'),
+          },
+          {
+            icon: <Package className="w-[18px] h-[18px]" />,
+            label: t.navInventory,
+            active: activeTab === 'inventory',
+            onClick: () => setActiveTab('inventory'),
+          },
+          {
+            icon: <HeartHandshake className="w-[18px] h-[18px]" />,
+            label: t.navRescue,
+            active: activeTab === 'rescue',
+            onClick: () => setActiveTab('rescue'),
+          },
+          {
+            icon: <ClipboardList className="w-[18px] h-[18px]" />,
+            label: t.navWaste,
+            active: activeTab === 'waste',
+            onClick: () => setActiveTab('waste'),
+          },
+          {
+            icon: <BarChart3 className="w-[18px] h-[18px]" />,
+            label: t.navForecast,
+            active: activeTab === 'forecast',
+            onClick: () => setActiveTab('forecast'),
+          },
+          {
+            icon: <Plus className="w-[18px] h-[18px]" />,
+            label: t.addStock.replace(/^\+\s*/, ''),
+            onClick: () => setAddModalOpen(true),
+          },
+          {
+            icon: <MessageSquare className="w-[18px] h-[18px]" />,
+            label: locale === 'bn' ? 'খাদক AI' : 'KHADOK AI',
+            accent: true,
+            active: chatOpen,
+            onClick: () => setChatOpen((prev) => !prev),
+          },
+        ];
+
+        return (
+          <>
+            {!introVisible && (
+              <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[45] max-w-[calc(100vw-1rem)] pointer-events-auto">
+                <MagnificationDock
+                  items={dockItems}
+                  reducedMotion={reducedMotion}
+                />
+              </div>
+            )}
+
+            <KhadokChatWidget
+              locale={locale}
+              inventory={inventory}
+              kitchenContext={kitchenContext}
+              reducedMotion={reducedMotion}
+              hidden={introVisible}
+              isOpen={chatOpen}
+              onOpenChange={setChatOpen}
+            />
+          </>
+        );
+      })()}
 
       {introVisible && (
         <LiquidGlassIntro

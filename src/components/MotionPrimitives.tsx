@@ -1,11 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  motion,
-  useScroll,
-  useSpring,
-  useTransform,
-  useVelocity,
-} from 'motion/react';
+import { motion, useSpring } from 'motion/react';
 import { Star } from 'lucide-react';
 import { toBengaliDigits } from '../i18n/translations';
 import { Locale } from '../types';
@@ -45,32 +39,13 @@ interface RippleWave {
   size: number;
 }
 
-// Gentle GPU-safe Scroll Buoyancy (avoids skewY/scaleY distortion of text, charts & backdrop-filter)
+// Clean GPU-stable workspace wrapper (avoids scroll-velocity displacement jitter on glass panels & charts)
 export const ScrollWobbleContainer: React.FC<{
   children: React.ReactNode;
   reducedMotion?: boolean;
   className?: string;
-}> = ({ children, reducedMotion = false, className = '' }) => {
-  const { scrollY } = useScroll();
-  const scrollVelocity = useVelocity(scrollY);
-  const smoothVelocity = useSpring(scrollVelocity, {
-    damping: 36,
-    stiffness: 280,
-    mass: 0.7,
-    restDelta: 0.5,
-  });
-
-  const y = useTransform(smoothVelocity, [-2000, 0, 2000], [5, 0, -5]);
-
-  if (reducedMotion) {
-    return <div className={className}>{children}</div>;
-  }
-
-  return (
-    <motion.div style={{ y }} className={className}>
-      {children}
-    </motion.div>
-  );
+}> = ({ children, className = '' }) => {
+  return <div className={className}>{children}</div>;
 };
 
 interface LiquidGlassCardProps {
